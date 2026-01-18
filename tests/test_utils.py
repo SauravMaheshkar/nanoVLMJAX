@@ -135,6 +135,13 @@ class CollidingRule:
             "Colliding physical axes",
         ),
     ],
+    ids=[
+        "simple",
+        "with-batch",
+        "none-logical-axes",
+        "empty-logical-axes",
+        "colliding-rule",
+    ],
 )
 def test_sharding_utilities(
     sharding_rule, logical_axes, expected_physical_axes, error, mesh
