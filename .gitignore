@@ -9,7 +9,6 @@
 venv/
 .venv/
 data/
-models/
 notebooks/
 
 uv.lock

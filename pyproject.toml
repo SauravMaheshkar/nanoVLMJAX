@@ -4,6 +4,7 @@ version = "0.0.1"
 requires-python = ">=3.11"
 dependencies = [
     "jax==0.8.1",
+    "jaxtyping>=0.3.5",
 ]
 
 [dependency-groups]
@@ -12,6 +13,9 @@ dev = [
     "pytest>=8.4.0",
     "ruff>=0.11.13",
 ]
+
+[tool.ruff.lint]
+ignore = ["F722"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
