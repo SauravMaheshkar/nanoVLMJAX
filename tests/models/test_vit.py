@@ -529,89 +529,79 @@ def test_vit_init(
 
 
 @pytest.mark.parametrize(
-    "img_size,patch_size,hidden_dim,num_heads,mlp_hidden_dim,num_blocks,cls_flag,batch_size,use_jit,use_dropout",
+    "model_id,revision,num_blocks,hidden_dim,patch_size,img_size,num_patches,cls_flag,batch_size,use_jit",
     [
-        (64, 8, 192, 3, 768, 2, True, 2, False, False),
-        (64, 8, 192, 3, 768, 2, False, 2, False, False),
-        (64, 8, 192, 3, 768, 2, True, 2, True, False),
-        (64, 8, 192, 3, 768, 2, True, 2, False, True),
+        (
+            "google/siglip-base-patch16-224",
+            "main",
+            12,
+            768,
+            16,
+            224,
+            196,
+            False,
+            1,
+            False,
+        ),
+        (
+            "google/siglip-base-patch16-224",
+            "main",
+            12,
+            768,
+            16,
+            224,
+            196,
+            False,
+            2,
+            True,
+        ),
+        ("SauravMaheshkar/nanoVLMJAX", "test", 2, 192, 8, 64, 64, True, 1, False),
+        ("SauravMaheshkar/nanoVLMJAX", "test", 2, 192, 8, 64, 64, True, 2, True),
     ],
-    ids=["with-cls-flag", "without-cls-flag", "with-jit", "with-dropout"],
+    ids=["siglip-no-jit", "siglip-jit", "hub-no-jit", "hub-jit"],
 )
-def test_vit_forward(
+def test_vit_from_pretrained(
     mesh,
-    img_size,
-    patch_size,
-    hidden_dim,
-    num_heads,
-    mlp_hidden_dim,
+    model_id,
+    revision,
     num_blocks,
+    hidden_dim,
+    patch_size,
+    img_size,
+    num_patches,
     cls_flag,
     batch_size,
     use_jit,
-    use_dropout,
 ):
-    cfg = ViTConfig(
-        vit_img_size=img_size,
-        vit_patch_size=patch_size,
-        vit_hidden_dim=hidden_dim,
-        vit_num_heads=num_heads,
-        vit_mlp_hidden_dim=mlp_hidden_dim,
-        vit_num_blocks=num_blocks,
-        vit_cls_flag=cls_flag,
-    )
-
-    key = random.PRNGKey(42)
-    params = ViT.init(key, mesh, ShardingRule, cfg)
-    x = random.normal(key, (batch_size, 3, img_size, img_size))
-
-    if use_dropout:
-        key = random.PRNGKey(43)
-    else:
-        key = None
-
-    if use_jit:
-        forward_fn = jax.jit(vit_forward)
-        output1 = forward_fn(params, x, key)
-        output2 = forward_fn(params, x, key)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = vit_forward(params, x, key)
-
-    if cls_flag:
-        assert output.shape == (batch_size, hidden_dim)
-    else:
-        num_patches = (img_size // patch_size) ** 2
-        assert output.shape == (batch_size, num_patches, hidden_dim)
-    assert output.dtype == cfg.dtype
-
-
-@pytest.mark.parametrize(
-    "batch_size,use_jit",
-    [
-        (1, False),
-        (2, True),
-    ],
-    ids=["no-jit", "jit"],
-)
-def test_vit_from_pretrained(mesh, batch_size, use_jit):
-    model_id = "google/siglip-base-patch16-224"
-
-    params = ViT.from_pretrained(model_id)
+    params = ViT.from_pretrained(model_id, revision=revision)
 
     assert isinstance(params, ViT)
     assert isinstance(params.patch_embedding, PatchEmbeddings)
-    assert len(params.blocks) == 12
+    assert len(params.blocks) == num_blocks
     assert isinstance(params.layer_norm, LayerNorm)
-    assert params.cls_flag is False
+    assert params.cls_flag is cls_flag
 
-    assert params.patch_embedding.conv_weight.shape == (16, 16, 3, 768)
+    assert params.patch_embedding.conv_weight.shape == (
+        patch_size,
+        patch_size,
+        3,
+        hidden_dim,
+    )
 
-    num_patches = (224 // 16) ** 2
-    assert params.patch_embedding.position_embedding.shape == (1, num_patches, 768)
+    if cls_flag:
+        assert params.patch_embedding.position_embedding.shape == (
+            1,
+            num_patches + 1,
+            hidden_dim,
+        )
+    else:
+        assert params.patch_embedding.position_embedding.shape == (
+            1,
+            num_patches,
+            hidden_dim,
+        )
 
-    x = random.normal(random.PRNGKey(0), (batch_size, 3, 224, 224))
+    x = random.normal(random.PRNGKey(0), (batch_size, 3, img_size, img_size))
 
     if use_jit:
         forward_fn = jax.jit(vit_forward)
@@ -619,5 +609,96 @@ def test_vit_from_pretrained(mesh, batch_size, use_jit):
     else:
         output = vit_forward(params, x)
 
-    assert output.shape == (batch_size, num_patches, 768)
+    if cls_flag:
+        assert output.shape == (batch_size, hidden_dim)
+    else:
+        assert output.shape == (batch_size, num_patches, hidden_dim)
     assert output.dtype == jnp.float32
+
+
+def test_vit_save_pretrained(mesh):
+    import json
+    import os
+    import tempfile
+
+    from safetensors import safe_open
+
+    cfg = ViTConfig(
+        vit_img_size=64,
+        vit_patch_size=8,
+        vit_hidden_dim=192,
+        vit_num_heads=3,
+        vit_mlp_hidden_dim=768,
+        vit_num_blocks=2,
+        vit_cls_flag=True,
+    )
+
+    key = random.PRNGKey(42)
+    params = ViT.init(key, mesh, ShardingRule, cfg)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        params.save_pretrained(tmpdir)
+
+        assert os.path.exists(os.path.join(tmpdir, "model.safetensors"))
+        assert os.path.exists(os.path.join(tmpdir, "config.json"))
+
+        with open(os.path.join(tmpdir, "config.json")) as f:
+            config = json.load(f)
+
+        assert config["model_type"] == "vit"
+        assert config["vit_img_size"] == 64
+        assert config["vit_patch_size"] == 8
+        assert config["vit_hidden_dim"] == 192
+        assert config["vit_num_blocks"] == 2
+        assert config["vit_cls_flag"] is True
+
+        weights = {}
+        with safe_open(os.path.join(tmpdir, "model.safetensors"), framework="pt") as f:
+            for key in f.keys():
+                weights[key] = f.get_tensor(key)
+
+        assert "vision_model.embeddings.patch_embedding.weight" in weights
+        assert "vision_model.embeddings.position_embedding.weight" in weights
+        assert "vision_model.embeddings.cls_token" in weights
+        assert "vision_model.post_layernorm.weight" in weights
+
+
+def test_vit_save_and_load(mesh):
+    import tempfile
+
+    cfg = ViTConfig(
+        vit_img_size=64,
+        vit_patch_size=8,
+        vit_hidden_dim=192,
+        vit_num_heads=3,
+        vit_mlp_hidden_dim=768,
+        vit_num_blocks=2,
+        vit_cls_flag=True,
+    )
+
+    key = random.PRNGKey(42)
+    params = ViT.init(key, mesh, ShardingRule, cfg)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        params.save_pretrained(tmpdir)
+
+        loaded_params = ViT.from_pretrained(tmpdir)
+
+        assert isinstance(loaded_params, ViT)
+        assert len(loaded_params.blocks) == params.num_blocks
+
+        assert (
+            loaded_params.patch_embedding.conv_weight.shape
+            == params.patch_embedding.conv_weight.shape
+        )
+        assert (
+            loaded_params.patch_embedding.position_embedding.shape
+            == params.patch_embedding.position_embedding.shape
+        )
+
+        loaded_params2 = ViT.from_pretrained(tmpdir)
+
+        assert (
+            loaded_params2.patch_embedding.conv_weight.shape
+            == params.patch_embedding.conv_weight.shape
+        )

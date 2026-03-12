@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import math
 import types
 from functools import lru_cache
@@ -6,9 +7,12 @@ from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import Array, Float
 
 from src.utils import ParamInitializer, ParamSpec, jax_pytree_struct
+
+logger = logging.getLogger(__name__)
 
 _he_normal = lru_cache(jax.nn.initializers.he_normal)
 _embed_init = jax.nn.initializers.uniform(scale=1)
@@ -648,99 +652,157 @@ class ViT(ParamInitializer):
         return super().init(key, mesh, rules, cfg)
 
     @classmethod
-    def from_pretrained(cls, model_id: str):
+    def from_pretrained(cls, model_id: str, *, revision: str = "main"):
         import json
+        import os
         import types
 
         import jax.random as random
         import safetensors
         from huggingface_hub import hf_hub_download
 
-        config_path = hf_hub_download(repo_id=model_id, filename="config.json")
+        is_local = os.path.isdir(model_id)
+
+        if is_local:
+            config_path = os.path.join(model_id, "config.json")
+            safetensors_file = os.path.join(model_id, "model.safetensors")
+        else:
+            config_path = hf_hub_download(
+                repo_id=model_id, filename="config.json", revision=revision
+            )
+            safetensors_file = hf_hub_download(
+                repo_id=model_id, filename="model.safetensors", revision=revision
+            )
+
         with open(config_path) as f:
             hf_config = json.load(f)
 
-        vision_config = hf_config.get("vision_config", hf_config)
-        text_config = hf_config.get("text_config", {})
-
-        patch_size = vision_config.get("patch_size", 16)
-
-        safetensors_file = hf_hub_download(
-            repo_id=model_id, filename="model.safetensors"
-        )
-        with safetensors.safe_open(safetensors_file, framework="pt", device="cpu") as f:
-            hidden_dim = text_config.get("hidden_size", 768)
-            num_heads = text_config.get("num_attention_heads", 12)
-            mlp_hidden_dim = text_config.get("intermediate_size", 3072)
-
-            num_layers = 0
-            while (
-                f"vision_model.encoder.layers.{num_layers}.layer_norm1.weight"
-                in f.keys()
-            ):
-                num_layers += 1
-            if num_layers == 0:
-                num_layers = 12
-
-        if "patch16" in model_id.lower():
-            img_size = 224
-        elif "patch32" in model_id.lower():
-            img_size = 384
+        if "model_type" in hf_config and hf_config["model_type"] == "vit":
+            cfg = types.SimpleNamespace(
+                vit_model_type=model_id,
+                vit_img_size=hf_config.get("vit_img_size", 224),
+                vit_patch_size=hf_config.get("vit_patch_size", 16),
+                vit_hidden_dim=hf_config.get("vit_hidden_dim", 768),
+                vit_num_heads=hf_config.get("vit_num_heads", 12),
+                vit_mlp_hidden_dim=hf_config.get("vit_mlp_hidden_dim", 3072),
+                vit_num_blocks=hf_config.get("vit_num_blocks", 12),
+                vit_cls_flag=hf_config.get("vit_cls_flag", False),
+                vit_dropout=hf_config.get("vit_dropout", 0.0),
+                vit_ln_eps=hf_config.get("vit_ln_eps", 1e-6),
+                dtype=jnp.float32,
+                conv_weight_logical_axes=(
+                    "kernel_h",
+                    "kernel_w",
+                    "in_channels",
+                    "out_channels",
+                ),
+                cls_token_logical_axes=(None, "seq", "hidden"),
+                position_embedding_logical_axes=(None, "seq", "hidden"),
+                ln1_scale_logical_axes=("hidden",),
+                ln1_bias_logical_axes=("hidden",),
+                ln2_scale_logical_axes=("hidden",),
+                ln2_bias_logical_axes=("hidden",),
+                final_ln_scale_logical_axes=("hidden",),
+                final_ln_bias_logical_axes=("hidden",),
+                qkv_proj_logical_axes=("hidden", None),
+                out_proj_logical_axes=("hidden", None),
+                fc1_weight_logical_axes=("hidden", None),
+                fc1_bias_logical_axes=(None,),
+                fc2_weight_logical_axes=(None, "hidden"),
+                fc2_bias_logical_axes=("hidden",),
+                conv_weight_initializer=None,
+                cls_token_initializer=None,
+                position_embedding_initializer=None,
+                ln1_scale_initializer=None,
+                ln1_bias_initializer=None,
+                ln2_scale_initializer=None,
+                ln2_bias_initializer=None,
+                final_ln_scale_initializer=None,
+                final_ln_bias_initializer=None,
+                qkv_proj_initializer=None,
+                out_proj_initializer=None,
+                fc1_weight_initializer=None,
+                fc1_bias_initializer=None,
+                fc2_weight_initializer=None,
+                fc2_bias_initializer=None,
+            )
         else:
-            img_size = 224
+            vision_config = hf_config.get("vision_config", hf_config)
+            text_config = hf_config.get("text_config", {})
 
-        cfg = types.SimpleNamespace(
-            vit_model_type=model_id,
-            vit_img_size=img_size,
-            vit_patch_size=patch_size,
-            vit_hidden_dim=hidden_dim,
-            vit_num_heads=num_heads,
-            vit_mlp_hidden_dim=mlp_hidden_dim,
-            vit_num_blocks=num_layers,
-            vit_cls_flag=False,
-            vit_dropout=0.0,
-            vit_ln_eps=1e-6,
-            dtype=jnp.float32,
-            conv_weight_logical_axes=(
-                "kernel_h",
-                "kernel_w",
-                "in_channels",
-                "out_channels",
-            ),
-            cls_token_logical_axes=(None, "seq", "hidden"),
-            position_embedding_logical_axes=(None, "seq", "hidden"),
-            ln1_scale_logical_axes=("hidden",),
-            ln1_bias_logical_axes=("hidden",),
-            ln2_scale_logical_axes=("hidden",),
-            ln2_bias_logical_axes=("hidden",),
-            final_ln_scale_logical_axes=("hidden",),
-            final_ln_bias_logical_axes=("hidden",),
-            qkv_proj_logical_axes=("hidden", None),
-            out_proj_logical_axes=("hidden", None),
-            fc1_weight_logical_axes=("hidden", None),
-            fc1_bias_logical_axes=(None,),
-            fc2_weight_logical_axes=(None, "hidden"),
-            fc2_bias_logical_axes=("hidden",),
-            conv_weight_initializer=None,
-            cls_token_initializer=None,
-            position_embedding_initializer=None,
-            ln1_scale_initializer=None,
-            ln1_bias_initializer=None,
-            ln2_scale_initializer=None,
-            ln2_bias_initializer=None,
-            final_ln_scale_initializer=None,
-            final_ln_bias_initializer=None,
-            qkv_proj_initializer=None,
-            out_proj_initializer=None,
-            fc1_weight_initializer=None,
-            fc1_bias_initializer=None,
-            fc2_weight_initializer=None,
-            fc2_bias_initializer=None,
-        )
+            patch_size = vision_config.get("patch_size", 16)
 
-        safetensors_file = hf_hub_download(
-            repo_id=model_id, filename="model.safetensors"
-        )
+            with safetensors.safe_open(
+                safetensors_file, framework="pt", device="cpu"
+            ) as f:
+                hidden_dim = text_config.get("hidden_size", 768)
+                num_heads = text_config.get("num_attention_heads", 12)
+                mlp_hidden_dim = text_config.get("intermediate_size", 3072)
+
+                num_layers = 0
+                while (
+                    f"vision_model.encoder.layers.{num_layers}.layer_norm1.weight"
+                    in f.keys()
+                ):
+                    num_layers += 1
+                if num_layers == 0:
+                    num_layers = 12
+
+            if "patch16" in model_id.lower():
+                img_size = 224
+            elif "patch32" in model_id.lower():
+                img_size = 384
+            else:
+                img_size = 224
+
+            cfg = types.SimpleNamespace(
+                vit_model_type=model_id,
+                vit_img_size=img_size,
+                vit_patch_size=patch_size,
+                vit_hidden_dim=hidden_dim,
+                vit_num_heads=num_heads,
+                vit_mlp_hidden_dim=mlp_hidden_dim,
+                vit_num_blocks=num_layers,
+                vit_cls_flag=False,
+                vit_dropout=0.0,
+                vit_ln_eps=1e-6,
+                dtype=jnp.float32,
+                conv_weight_logical_axes=(
+                    "kernel_h",
+                    "kernel_w",
+                    "in_channels",
+                    "out_channels",
+                ),
+                cls_token_logical_axes=(None, "seq", "hidden"),
+                position_embedding_logical_axes=(None, "seq", "hidden"),
+                ln1_scale_logical_axes=("hidden",),
+                ln1_bias_logical_axes=("hidden",),
+                ln2_scale_logical_axes=("hidden",),
+                ln2_bias_logical_axes=("hidden",),
+                final_ln_scale_logical_axes=("hidden",),
+                final_ln_bias_logical_axes=("hidden",),
+                qkv_proj_logical_axes=("hidden", None),
+                out_proj_logical_axes=("hidden", None),
+                fc1_weight_logical_axes=("hidden", None),
+                fc1_bias_logical_axes=(None,),
+                fc2_weight_logical_axes=(None, "hidden"),
+                fc2_bias_logical_axes=("hidden",),
+                conv_weight_initializer=None,
+                cls_token_initializer=None,
+                position_embedding_initializer=None,
+                ln1_scale_initializer=None,
+                ln1_bias_initializer=None,
+                ln2_scale_initializer=None,
+                ln2_bias_initializer=None,
+                final_ln_scale_initializer=None,
+                final_ln_bias_initializer=None,
+                qkv_proj_initializer=None,
+                out_proj_initializer=None,
+                fc1_weight_initializer=None,
+                fc1_bias_initializer=None,
+                fc2_weight_initializer=None,
+                fc2_bias_initializer=None,
+            )
 
         hf_state_dict = {}
         with safetensors.safe_open(safetensors_file, framework="pt", device="cpu") as f:
@@ -829,20 +891,26 @@ class ViT(ParamInitializer):
                     [q_w, k_w, v_w], axis=0
                 ).T
 
-                q_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.q_proj.bias"))
-                k_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.k_proj.bias"))
-                v_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.v_proj.bias"))
-                hf_dict[f"blocks.{i}.attn.qkv_proj.bias"] = jnp.concatenate(
-                    [q_b, k_b, v_b], axis=0
-                )
+                if (
+                    f"{prefix}.self_attn.q_proj.bias" in hf_dict
+                    and f"{prefix}.self_attn.k_proj.bias" in hf_dict
+                    and f"{prefix}.self_attn.v_proj.bias" in hf_dict
+                ):
+                    q_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.q_proj.bias"))
+                    k_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.k_proj.bias"))
+                    v_b = jnp.array(hf_dict.pop(f"{prefix}.self_attn.v_proj.bias"))
+                    hf_dict[f"blocks.{i}.attn.qkv_proj.bias"] = jnp.concatenate(
+                        [q_b, k_b, v_b], axis=0
+                    )
 
                 out_proj_weight = jnp.array(
                     hf_dict.pop(f"{prefix}.self_attn.out_proj.weight")
                 )
                 hf_dict[f"blocks.{i}.attn.out_proj.weight"] = out_proj_weight.T
-                hf_dict[f"blocks.{i}.attn.out_proj.bias"] = jnp.array(
-                    hf_dict.pop(f"{prefix}.self_attn.out_proj.bias")
-                )
+                if f"{prefix}.self_attn.out_proj.bias" in hf_dict:
+                    hf_dict[f"blocks.{i}.attn.out_proj.bias"] = jnp.array(
+                        hf_dict.pop(f"{prefix}.self_attn.out_proj.bias")
+                    )
 
             def _set_nested_attr(obj, path, value):
                 parts = path.split(".")
@@ -861,12 +929,147 @@ class ViT(ParamInitializer):
                     continue
                 try:
                     _set_nested_attr(params, jax_key, value)
-                except AttributeError:
-                    pass
+                except AttributeError as e:
+                    logger.warning(
+                        "Failed to map weight '%s' from checkpoint: %s", jax_key, e
+                    )
 
             return params
 
         return _map_weights(hf_state_dict, params)
+
+    def save_pretrained(self, save_dir: str):
+        import json
+        import os
+
+        import safetensors.numpy
+
+        os.makedirs(save_dir, exist_ok=True)
+
+        state_dict = {}
+
+        state_dict["vision_model.embeddings.patch_embedding.weight"] = np.array(
+            self.patch_embedding.conv_weight
+        )
+        state_dict["vision_model.embeddings.position_embedding.weight"] = np.array(
+            self.patch_embedding.position_embedding
+        )
+
+        if self.patch_embedding.cls_token is not None:
+            state_dict["vision_model.embeddings.cls_token"] = np.array(
+                self.patch_embedding.cls_token
+            )
+
+        state_dict["vision_model.post_layernorm.weight"] = np.array(
+            self.layer_norm.scale
+        )
+        state_dict["vision_model.post_layernorm.bias"] = np.array(self.layer_norm.bias)
+
+        for i, block in enumerate(self.blocks):
+            prefix = f"vision_model.encoder.layers.{i}"
+
+            state_dict[f"{prefix}.layer_norm1.weight"] = np.array(block.ln1.scale)
+            state_dict[f"{prefix}.layer_norm1.bias"] = np.array(block.ln1.bias)
+            state_dict[f"{prefix}.layer_norm2.weight"] = np.array(block.ln2.scale)
+            state_dict[f"{prefix}.layer_norm2.bias"] = np.array(block.ln2.bias)
+
+            if hasattr(block.mlp.fc1, "weight"):
+                fc1_weight = np.array(block.mlp.fc1.weight).T
+                fc1_bias = np.array(block.mlp.fc1.bias)
+                fc2_weight = np.array(block.mlp.fc2.weight).T
+                fc2_bias = np.array(block.mlp.fc2.bias)
+            else:
+                fc1_weight = np.array(block.mlp.fc1).T
+                fc1_bias = None
+                fc2_weight = np.array(block.mlp.fc2).T
+                fc2_bias = None
+
+            state_dict[f"{prefix}.mlp.fc1.weight"] = fc1_weight
+            if fc1_bias is not None:
+                state_dict[f"{prefix}.mlp.fc1.bias"] = fc1_bias
+            state_dict[f"{prefix}.mlp.fc2.weight"] = fc2_weight
+            if fc2_bias is not None:
+                state_dict[f"{prefix}.mlp.fc2.bias"] = fc2_bias
+
+            if hasattr(block.attn.qkv_proj, "weight"):
+                qkv_proj_array = block.attn.qkv_proj.weight
+                qkv_bias_array = block.attn.qkv_proj.bias
+            else:
+                qkv_proj_array = block.attn.qkv_proj
+                qkv_bias_array = None
+
+            qkv_weight = np.array(qkv_proj_array).T
+            hidden_dim = qkv_weight.shape[0] // 3
+            q_w = qkv_weight[:hidden_dim, :]
+            k_w = qkv_weight[hidden_dim : 2 * hidden_dim, :]
+            v_w = qkv_weight[2 * hidden_dim :, :]
+
+            state_dict[f"{prefix}.self_attn.q_proj.weight"] = q_w
+            state_dict[f"{prefix}.self_attn.k_proj.weight"] = k_w
+            state_dict[f"{prefix}.self_attn.v_proj.weight"] = v_w
+
+            if qkv_bias_array is not None:
+                qkv_bias = np.array(qkv_bias_array)
+                q_b = qkv_bias[:hidden_dim]
+                k_b = qkv_bias[hidden_dim : 2 * hidden_dim]
+                v_b = qkv_bias[2 * hidden_dim :]
+
+                state_dict[f"{prefix}.self_attn.q_proj.bias"] = q_b
+                state_dict[f"{prefix}.self_attn.k_proj.bias"] = k_b
+                state_dict[f"{prefix}.self_attn.v_proj.bias"] = v_b
+
+            if hasattr(block.attn.out_proj, "weight"):
+                out_proj_weight = np.array(block.attn.out_proj.weight).T
+                out_proj_bias = np.array(block.attn.out_proj.bias)
+            else:
+                out_proj_weight = np.array(block.attn.out_proj).T
+                out_proj_bias = None
+
+            state_dict[f"{prefix}.self_attn.out_proj.weight"] = out_proj_weight
+            if out_proj_bias is not None:
+                state_dict[f"{prefix}.self_attn.out_proj.bias"] = out_proj_bias
+
+        safetensors.numpy.save_file(
+            state_dict, os.path.join(save_dir, "model.safetensors")
+        )
+
+        config = {
+            "model_type": "vit",
+            "vit_img_size": self.patch_embedding.img_size,
+            "vit_patch_size": self.patch_embedding.patch_size,
+            "vit_hidden_dim": self.patch_embedding.embd_dim,
+            "vit_num_heads": self.blocks[0].attn.num_heads,
+            "vit_num_blocks": self.num_blocks,
+            "vit_cls_flag": self.cls_flag,
+            "vit_ln_eps": self.blocks[0].ln1.eps,
+        }
+
+        with open(os.path.join(save_dir, "config.json"), "w") as f:
+            json.dump(config, f, indent=2)
+
+    def push_to_hub(
+        self,
+        model_id: str,
+        *,
+        private: bool = False,
+        commit_message: str = "Upload ViT model",
+    ) -> None:
+        import tempfile
+
+        from huggingface_hub import HfApi, create_repo
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.save_pretrained(tmpdir)
+
+            create_repo(model_id, private=private, exist_ok=True)
+
+            api = HfApi()
+            api.upload_folder(
+                folder_path=tmpdir,
+                repo_id=model_id,
+                repo_type="model",
+                commit_message=commit_message,
+            )
 
 
 def vit_forward(
