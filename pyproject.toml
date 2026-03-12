@@ -7,14 +7,22 @@ dependencies = [
     "jaxtyping>=0.3.5",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
+hub = [
+    "huggingface-hub>=0.32.4",
+    "safetensors>=0.5.2",
+    "torch>=2.0.0",
+]
 dev = [
     "pre-commit>=4.2.0",
-    "pytest>=8.4.0",
     "ruff>=0.11.13",
+]
+test = [
+    "pytest>=8.4.0",
 ]
 
 [tool.ruff.lint]
+select = ["E", "F", "I001"]
 ignore = ["F722"]
 
 [tool.pytest.ini_options]

@@ -1,4 +1,8 @@
 
+```bash
+uv sync --all-extras
+```
+
 ### References
 
 * https://github.com/huggingface/nanoVLM
