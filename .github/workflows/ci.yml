@@ -1,0 +1,48 @@
+name: "CI/CD"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.py"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.py"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
+  release:
+    types: [created]
+  schedule:
+    - cron: "0 0 * * 0"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Ruff
+        run: |
+          uv run ruff check --fix .
+
+      - name: Test with PyTest
+        run: |
+          uv run python -m pytest -v
