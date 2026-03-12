@@ -585,3 +585,39 @@ def test_vit_forward(
         num_patches = (img_size // patch_size) ** 2
         assert output.shape == (batch_size, num_patches, hidden_dim)
     assert output.dtype == cfg.dtype
+
+
+@pytest.mark.parametrize(
+    "batch_size,use_jit",
+    [
+        (1, False),
+        (2, True),
+    ],
+    ids=["no-jit", "jit"],
+)
+def test_vit_from_pretrained(mesh, batch_size, use_jit):
+    model_id = "google/siglip-base-patch16-224"
+
+    params = ViT.from_pretrained(model_id)
+
+    assert isinstance(params, ViT)
+    assert isinstance(params.patch_embedding, PatchEmbeddings)
+    assert len(params.blocks) == 12
+    assert isinstance(params.layer_norm, LayerNorm)
+    assert params.cls_flag is False
+
+    assert params.patch_embedding.conv_weight.shape == (16, 16, 3, 768)
+
+    num_patches = (224 // 16) ** 2
+    assert params.patch_embedding.position_embedding.shape == (1, num_patches, 768)
+
+    x = random.normal(random.PRNGKey(0), (batch_size, 3, 224, 224))
+
+    if use_jit:
+        forward_fn = jax.jit(vit_forward)
+        output = forward_fn(params, x)
+    else:
+        output = vit_forward(params, x)
+
+    assert output.shape == (batch_size, num_patches, 768)
+    assert output.dtype == jnp.float32

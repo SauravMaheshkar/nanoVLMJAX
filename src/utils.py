@@ -56,8 +56,9 @@ def jax_pytree_struct(cls):
 
 def logical_to_physical(logical_axes: Axes, rules) -> jax.sharding.PartitionSpec:
     """
-    Returns a jax.sharding.PartitionSpec describing how to partition an array across a mesh of devices
-    based on the given logical array dimensions (i.e. the logical shape of an array)
+    Returns a jax.sharding.PartitionSpec describing how to partition an array across a
+    mesh of devices based on the given logical array dimensions
+    (i.e. the logical shape of an array)
 
     Args:
         logical_axes (Axes): The logical axes to shard.
@@ -83,12 +84,12 @@ def logical_to_physical(logical_axes: Axes, rules) -> jax.sharding.PartitionSpec
         getattr(rules, axis) if axis is not None else None for axis in logical_axes
     ]
 
-    # `physical_axes` may contain tuples, flatten to check that `physical_axes` maps each physical mesh axis
-    # to at most one logical array axis.
+    # `physical_axes` may contain tuples, flatten to check that `physical_axes`
+    # maps each physical mesh axis to at most one logical array axis.
     flat_axes = jax.tree.leaves(physical_axes)
     if len(set(flat_axes)) != len(flat_axes):
         raise ValueError(
-            f"Colliding physical axes from translating logical spec {logical_axes} -> {physical_axes}"
+            f"Colliding physical axes from translating logical spec {logical_axes} -> {physical_axes}"  # noqa: E501
         )
     return PartitionSpec(*physical_axes)
 
@@ -97,7 +98,8 @@ def logical_to_sharding(
     logical_axes: Axes, mesh: jax.sharding.Mesh, rules
 ) -> jax.sharding.NamedSharding:
     """
-    Constructs a jax.sharding.NamedSharding object based on the given logical array dimensions, mesh of devices and sharding rules.
+    Constructs a jax.sharding.NamedSharding object based on the given logical
+    array dimensions, mesh of devices and sharding rules.
 
     Args:
         logical_axes (Axes): The logical axes to shard.
@@ -114,7 +116,8 @@ def logical_to_sharding(
         >>> mesh = jax.sharding.Mesh(
         ...     devices=np.array(jax.devices()).reshape(2, 4), axis_names=("fsdp", "tp")
         ... )
-        >>> sharding = logical_to_sharding(logical_axes=("batch", "feature"), mesh=mesh, ShardingRule)
+        >>> sharding = logical_to_sharding(logical_axes=("batch", "feature"),
+        ...     mesh=mesh, ShardingRule)
         >>> sharding.spec
         PartitionSpec('fsdp', 'tp')
 
@@ -131,7 +134,7 @@ def logical_to_sharding(
 @partial(jax.jit, static_argnames=("param_specs", "shardings"))
 def _init_leaves(key: jax.random.PRNGKey, param_specs, shardings):
     """
-    Initializes a PyTree of parameter arrays from ParamSpec objects using a given RNG key.
+    Initializes a PyTree of parameter arrays from ParamSpec objects using a given key.
 
     Takes a PyTree of parameter specifications and creates initialized JAX arrays
     with proper sharding across devices.
@@ -145,7 +148,8 @@ def _init_leaves(key: jax.random.PRNGKey, param_specs, shardings):
         PyTree of initialized, sharded JAX arrays with the same structure as param_specs
     """
 
-    # inner function uses out_shardings to ensure arrays are created with correct sharding
+    # inner function uses out_shardings to ensure arrays are created with
+    # the correct sharding
     @partial(jax.jit, out_shardings=shardings)
     def _init_fn(key):
         # determine how many RNG keys are needed (one per tensor !)
@@ -218,7 +222,7 @@ class ParamInitializer:
         cls, key: jax.random.PRNGKey, mesh: jax.sharding.Mesh, rules, *args, **kwargs
     ):
         """
-        Initialize a PyTree of parameter arrays from ParamSpec objects using a given RNG key.
+        Initialize a PyTree of parameter arrays from ParamSpec objects using a given key
 
         Args:
             key (jax.random.PRNGKey): key for random number generation
