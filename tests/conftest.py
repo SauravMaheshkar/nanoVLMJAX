@@ -10,6 +10,10 @@ def pytest_configure():
     if "XLA_FLAGS" not in os.environ:
         os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
 
+    # Limit JAX memory usage for CI environments
+    if "XLA_PYTHON_CLIENT_MEM_FRACTION" not in os.environ:
+        os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+
 
 @pytest.fixture(scope="session")
 def jax_devices():
