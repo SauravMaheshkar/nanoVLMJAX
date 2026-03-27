@@ -917,6 +917,7 @@ def language_model_forward(
     input_ids: Int[Array, "B S"],
     key: jax.Array | None = None,
     attention_mask: Float[Array, "B S"] | None = None,
+    token_embd: Float[Array, "B S D"] | None = None,
 ) -> Float[Array, "B S V"]:
     """
     Forward pass through the language model.
@@ -926,12 +927,17 @@ def language_model_forward(
         input_ids: Input token IDs of shape (B, S)
         key: Optional PRNG key for dropout
         attention_mask: Optional attention mask of shape (B, S)
+        token_embd: Optional pre-computed token embeddings of shape (B, S, D).
+                   If provided, skips the embedding lookup.
 
     Returns:
         Output logits of shape (B, S, V)
     """
     with jax.named_scope("token_embedding"):
-        x = params.token_embedding[input_ids]
+        if token_embd is None:
+            x = params.token_embedding[input_ids]
+        else:
+            x = token_embd
 
     with jax.named_scope("rotary_emb"):
         B, S = input_ids.shape

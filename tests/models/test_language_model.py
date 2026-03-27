@@ -25,16 +25,16 @@ from src.models.language_model import (
 
 @dataclasses.dataclass
 class LMConfig:
-    lm_vocab_size: int = 32000
-    lm_hidden_dim: int = 768
-    lm_n_heads: int = 12
-    lm_n_kv_heads: int = 4
+    lm_vocab_size: int = 256
+    lm_hidden_dim: int = 64
+    lm_n_heads: int = 4
+    lm_n_kv_heads: int = 2
     lm_n_layers: int = 2
-    lm_inter_dim: int = 2048
+    lm_inter_dim: int = 128
     lm_dropout: float = 0.1
     lm_rms_eps: float = 1e-6
     lm_re_base: float = 10000.0
-    lm_max_position_embeddings: int = 2048
+    lm_max_position_embeddings: int = 256
     lm_attn_scaling: float = 1.0
     lm_use_tokens: bool = True
     lm_tie_weights: bool = False
@@ -86,10 +86,10 @@ class ShardingRule:
 @pytest.mark.parametrize(
     "hidden_dim,eps",
     [
-        (768, 1e-6),
-        (1024, 1e-5),
+        (64, 1e-6),
+        (128, 1e-5),
     ],
-    ids=["768-1e-6", "1024-1e-5"],
+    ids=["64-1e-6", "128-1e-5"],
 )
 def test_rms_norm_init(mesh, hidden_dim, eps):
     cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_rms_eps=eps)
@@ -106,8 +106,8 @@ def test_rms_norm_init(mesh, hidden_dim, eps):
 @pytest.mark.parametrize(
     "batch_size,seq_len,hidden_dim,use_jit",
     [
-        (2, 128, 768, True),
-        (2, 128, 768, False),
+        (2, 32, 64, True),
+        (2, 32, 64, False),
     ],
     ids=["with-jit", "without-jit"],
 )
@@ -153,8 +153,8 @@ def test_rotate_half(mesh):
 
 @pytest.mark.parametrize(
     "hidden_dim,n_heads",
-    [(768, 12)],
-    ids=["768-12"],
+    [(64, 4)],
+    ids=["64-4"],
 )
 def test_rotary_embedding_init(mesh, hidden_dim, n_heads):
     cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_n_heads=n_heads)
@@ -172,9 +172,9 @@ def test_rotary_embedding_init(mesh, hidden_dim, n_heads):
 @pytest.mark.parametrize(
     "batch_size,seq_len,hidden_dim,n_heads",
     [
-        (2, 128, 768, 12),
+        (2, 32, 64, 4),
     ],
-    ids=["batch-2-seq-128"],
+    ids=["batch-2-seq-32"],
 )
 def test_rotary_embedding_forward(mesh, batch_size, seq_len, hidden_dim, n_heads):
     cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_n_heads=n_heads)
@@ -194,7 +194,7 @@ def test_rotary_embedding_forward(mesh, batch_size, seq_len, hidden_dim, n_heads
 @pytest.mark.parametrize(
     "batch_size,n_heads,seq_len,head_dim",
     [
-        (2, 12, 128, 64),
+        (2, 4, 32, 16),
     ],
     ids=["standard"],
 )
@@ -215,7 +215,7 @@ def test_apply_rotary_pos_emb(mesh, batch_size, n_heads, seq_len, head_dim):
 
 @pytest.mark.parametrize(
     "hidden_dim,n_heads,n_kv_heads",
-    [(768, 12, 4)],
+    [(64, 4, 2)],
     ids=["standard-gqa"],
 )
 def test_gqa_init(mesh, hidden_dim, n_heads, n_kv_heads):
@@ -241,8 +241,8 @@ def test_gqa_init(mesh, hidden_dim, n_heads, n_kv_heads):
 @pytest.mark.parametrize(
     "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads,use_jit,use_dropout",
     [
-        (2, 128, 768, 12, 4, True, False),
-        (2, 128, 768, 12, 4, False, True),
+        (2, 32, 64, 4, 2, True, False),
+        (2, 32, 64, 4, 2, False, True),
     ],
     ids=["with-jit", "with-dropout"],
 )
@@ -285,7 +285,7 @@ def test_gqa_forward(
 
 @pytest.mark.parametrize(
     "hidden_dim,inter_dim",
-    [(768, 2048)],
+    [(64, 128)],
     ids=["standard-mlp"],
 )
 def test_mlp_init(mesh, hidden_dim, inter_dim):
@@ -305,8 +305,8 @@ def test_mlp_init(mesh, hidden_dim, inter_dim):
 @pytest.mark.parametrize(
     "batch_size,seq_len,hidden_dim,inter_dim,use_jit",
     [
-        (2, 128, 768, 2048, True),
-        (2, 128, 768, 2048, False),
+        (2, 32, 64, 128, True),
+        (2, 32, 64, 128, False),
     ],
     ids=["with-jit", "without-jit"],
 )
@@ -331,7 +331,7 @@ def test_mlp_forward(mesh, batch_size, seq_len, hidden_dim, inter_dim, use_jit):
 
 @pytest.mark.parametrize(
     "hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim",
-    [(768, 12, 4, 2, 2048)],
+    [(64, 4, 2, 2, 128)],
     ids=["standard-block"],
 )
 def test_block_init(mesh, hidden_dim, n_heads, n_kv_heads, n_layers, inter_dim):
@@ -356,8 +356,8 @@ def test_block_init(mesh, hidden_dim, n_heads, n_kv_heads, n_layers, inter_dim):
 @pytest.mark.parametrize(
     "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads,inter_dim,use_jit",
     [
-        (2, 128, 768, 12, 4, 2048, True),
-        (2, 128, 768, 12, 4, 2048, False),
+        (2, 32, 64, 4, 2, 128, True),
+        (2, 32, 64, 4, 2, 128, False),
     ],
     ids=["with-jit", "without-jit"],
 )
@@ -400,7 +400,7 @@ def test_block_forward(
 
 @pytest.mark.parametrize(
     "vocab_size,hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim",
-    [(32000, 768, 12, 4, 2, 2048)],
+    [(256, 64, 4, 2, 2, 128)],
     ids=["standard-lm"],
 )
 def test_language_model_init(
@@ -432,8 +432,8 @@ def test_language_model_init(
 @pytest.mark.parametrize(
     "batch_size,seq_len,vocab_size,hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim,use_jit",
     [
-        (2, 128, 32000, 768, 12, 4, 2, 2048, True),
-        (2, 128, 32000, 768, 12, 4, 2, 2048, False),
+        (2, 32, 256, 64, 4, 2, 2, 128, True),
+        (2, 32, 256, 64, 4, 2, 2, 128, False),
     ],
     ids=["with-jit", "without-jit"],
 )
@@ -472,16 +472,16 @@ def test_language_model_forward(
 
 
 def test_language_model_attention_mask(mesh):
-    cfg = LMConfig(lm_hidden_dim=768, lm_n_heads=12, lm_n_kv_heads=4)
+    cfg = LMConfig(lm_hidden_dim=64, lm_n_heads=4, lm_n_kv_heads=2)
 
     key = random.PRNGKey(42)
     params = LanguageModel.init(key, mesh, ShardingRule, cfg)
 
-    batch_size, seq_len = 2, 128
+    batch_size, seq_len = 2, 32
     input_ids = random.randint(key, (batch_size, seq_len), 0, cfg.lm_vocab_size)
 
     attention_mask = jnp.ones((batch_size, seq_len))
-    attention_mask = attention_mask.at[:, 64:].set(0)
+    attention_mask = attention_mask.at[:, 16:].set(0)
 
     output = language_model_forward(params, input_ids, attention_mask=attention_mask)
 
@@ -544,12 +544,12 @@ def test_language_model_save_pretrained(mesh):
     import tempfile
 
     cfg = LMConfig(
-        lm_vocab_size=32000,
-        lm_hidden_dim=576,
-        lm_n_heads=9,
-        lm_n_kv_heads=3,
+        lm_vocab_size=256,
+        lm_hidden_dim=64,
+        lm_n_heads=4,
+        lm_n_kv_heads=2,
         lm_n_layers=2,
-        lm_inter_dim=1536,
+        lm_inter_dim=128,
     )
 
     key = random.PRNGKey(42)
