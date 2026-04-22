@@ -702,3 +702,53 @@ def test_vit_save_and_load(mesh):
             loaded_params2.patch_embedding.conv_weight.shape
             == params.patch_embedding.conv_weight.shape
         )
+
+
+def test_vit_dataloader_forward(mesh):
+    import numpy as np
+    from transformers import AutoProcessor
+
+    from src.data.datasets import VLMDataset, load_cauldron
+    from src.models.vit import ViT, vit_forward
+
+    ds = load_cauldron(
+        dataset_path="HuggingFaceM4/the_cauldron",
+        dataset_name="tqa",
+        max_samples=2,
+    )
+
+    processor = AutoProcessor.from_pretrained("google/siglip2-base-patch16-512")
+    dataset = VLMDataset(
+        hf_dataset=ds,
+        image_processor=processor,
+    )
+
+    vit_cfg = ViTConfig(
+        vit_img_size=512,
+        vit_patch_size=16,
+        vit_hidden_dim=768,
+        vit_num_heads=12,
+        vit_mlp_hidden_dim=3072,
+        vit_num_blocks=2,
+        vit_cls_flag=True,
+    )
+
+    key = random.PRNGKey(42)
+    params = ViT.init(key, mesh, ShardingRule, vit_cfg)
+
+    item = dataset[0]
+    images = item["images"]
+    assert images, "Expected dataset item to contain at least one image"
+    if images:
+        image = images[0]
+        if hasattr(image, "pixel_values"):
+            x = image.pixel_values
+        else:
+            x = image
+
+        x = np.asarray(x)
+        x = x[0]
+        x = np.expand_dims(x, axis=0)
+
+        output = vit_forward(params, x)
+        assert output.shape[1] == vit_cfg.vit_hidden_dim
