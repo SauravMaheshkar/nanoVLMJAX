@@ -8,7 +8,6 @@
 
 venv/
 .venv/
-data/
 notebooks/
 
 uv.lock

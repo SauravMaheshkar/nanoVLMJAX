@@ -3,9 +3,13 @@ name = "nanoVLMJAX"
 version = "0.0.1"
 requires-python = ">=3.11"
 dependencies = [
+    "datasets>=4.8.4",
+    "grain>=0.2.16",
     "jax==0.8.1",
     "jaxtyping>=0.3.5",
     "optax>=0.2.0",
+    "pillow>=10.0.0",
+    "transformers>=5.5.4",
 ]
 
 [project.optional-dependencies]
