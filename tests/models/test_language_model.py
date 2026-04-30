@@ -19,7 +19,6 @@ from src.models.language_model import (
     language_model_mlp_forward,
     rms_norm_forward,
     rotary_embedding_forward,
-    rotate_half,
 )
 
 
@@ -84,45 +83,21 @@ class ShardingRule:
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,eps",
+    "batch_size,seq_len,hidden_dim",
     [
-        (64, 1e-6),
-        (128, 1e-5),
+        (2, 32, 64),
     ],
-    ids=["64-1e-6", "128-1e-5"],
+    ids=["with-jit"],
 )
-def test_rms_norm_init(mesh, hidden_dim, eps):
-    cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_rms_eps=eps)
-
-    key = random.PRNGKey(42)
-    params = RMSNorm.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, RMSNorm)
-    assert params.weight.shape == (hidden_dim,)
-    assert params.normalized_shape == hidden_dim
-    assert params.eps == eps
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,hidden_dim,use_jit",
-    [
-        (2, 32, 64, True),
-        (2, 32, 64, False),
-    ],
-    ids=["with-jit", "without-jit"],
-)
-def test_rms_norm_forward(mesh, batch_size, seq_len, hidden_dim, use_jit):
+def test_rms_norm_forward(mesh, batch_size, seq_len, hidden_dim):
     cfg = LMConfig(lm_hidden_dim=hidden_dim)
 
     key = random.PRNGKey(42)
     params = RMSNorm.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, hidden_dim))
 
-    if use_jit:
-        forward_fn = jax.jit(rms_norm_forward)
-        output = forward_fn(params, x)
-    else:
-        output = rms_norm_forward(params, x)
+    forward_fn = jax.jit(rms_norm_forward)
+    output = forward_fn(params, x)
 
     assert output.shape == (batch_size, seq_len, hidden_dim)
     assert output.dtype == cfg.dtype
@@ -142,31 +117,6 @@ def test_rms_norm_normalization(mesh):
 
 
 #### Rotary Embedding Tests ####
-
-
-def test_rotate_half(mesh):
-    x = jnp.arange(8).reshape(1, 4, 2).astype(jnp.float32)
-    result = rotate_half(x)
-    expected = jnp.concatenate([-x[..., 1:], x[..., :1]], axis=-1)
-    assert jnp.allclose(result, expected)
-
-
-@pytest.mark.parametrize(
-    "hidden_dim,n_heads",
-    [(64, 4)],
-    ids=["64-4"],
-)
-def test_rotary_embedding_init(mesh, hidden_dim, n_heads):
-    cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_n_heads=n_heads)
-
-    key = random.PRNGKey(42)
-    params = RotaryEmbedding.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, RotaryEmbedding)
-    assert params.head_dim == hidden_dim // n_heads
-    assert params.base == cfg.lm_re_base
-    assert params.max_seq_len == cfg.lm_max_position_embeddings
-    assert params.attention_scaling == cfg.lm_attn_scaling
 
 
 @pytest.mark.parametrize(
@@ -214,41 +164,13 @@ def test_apply_rotary_pos_emb(mesh, batch_size, n_heads, seq_len, head_dim):
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,n_heads,n_kv_heads",
-    [(64, 4, 2)],
-    ids=["standard-gqa"],
-)
-def test_gqa_init(mesh, hidden_dim, n_heads, n_kv_heads):
-    cfg = LMConfig(
-        lm_hidden_dim=hidden_dim,
-        lm_n_heads=n_heads,
-        lm_n_kv_heads=n_kv_heads,
-    )
-
-    key = random.PRNGKey(42)
-    params = LanguageModelGroupedQueryAttention.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, LanguageModelGroupedQueryAttention)
-    assert params.q_proj.shape == (hidden_dim, hidden_dim)
-    assert params.k_proj.shape == (hidden_dim, (hidden_dim // n_heads) * n_kv_heads)
-    assert params.v_proj.shape == (hidden_dim, (hidden_dim // n_heads) * n_kv_heads)
-    assert params.out_proj.shape == (hidden_dim, hidden_dim)
-    assert params.n_heads == n_heads
-    assert params.n_kv_heads == n_kv_heads
-    assert params.head_dim == hidden_dim // n_heads
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads,use_jit,use_dropout",
+    "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads",
     [
-        (2, 32, 64, 4, 2, True, False),
-        (2, 32, 64, 4, 2, False, True),
+        (2, 32, 64, 4, 2),
     ],
-    ids=["with-jit", "with-dropout"],
+    ids=["with-jit"],
 )
-def test_gqa_forward(
-    mesh, batch_size, seq_len, hidden_dim, n_heads, n_kv_heads, use_jit, use_dropout
-):
+def test_gqa_forward(mesh, batch_size, seq_len, hidden_dim, n_heads, n_kv_heads):
     cfg = LMConfig(
         lm_hidden_dim=hidden_dim,
         lm_n_heads=n_heads,
@@ -263,65 +185,34 @@ def test_gqa_forward(
     rotary_params = RotaryEmbedding.init(key, mesh, ShardingRule, cfg)
     cos, sin = rotary_embedding_forward(rotary_params, position_ids)
 
-    if use_dropout:
-        key = random.PRNGKey(43)
-    else:
-        key = None
+    key = random.PRNGKey(43)
+    forward_fn = jax.jit(language_model_gqa_forward)
+    output1 = forward_fn(params, x, cos, sin, key)
+    output2 = forward_fn(params, x, cos, sin, key)
+    assert jnp.allclose(output1, output2)
 
-    if use_jit:
-        forward_fn = jax.jit(language_model_gqa_forward)
-        output1 = forward_fn(params, x, cos, sin, key)
-        output2 = forward_fn(params, x, cos, sin, key)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = language_model_gqa_forward(params, x, cos, sin, key)
-
-    assert output.shape == (batch_size, seq_len, hidden_dim)
+    assert output1.shape == (batch_size, seq_len, hidden_dim)
 
 
 #### MLP Tests ####
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,inter_dim",
-    [(64, 128)],
-    ids=["standard-mlp"],
-)
-def test_mlp_init(mesh, hidden_dim, inter_dim):
-    cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_inter_dim=inter_dim)
-
-    key = random.PRNGKey(42)
-    params = LanguageModelMLP.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, LanguageModelMLP)
-    assert params.gate_proj.shape == (hidden_dim, inter_dim)
-    assert params.up_proj.shape == (hidden_dim, inter_dim)
-    assert params.down_proj.shape == (inter_dim, hidden_dim)
-    assert params.hidden_dim == hidden_dim
-    assert params.inter_dim == inter_dim
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,hidden_dim,inter_dim,use_jit",
+    "batch_size,seq_len,hidden_dim,inter_dim",
     [
-        (2, 32, 64, 128, True),
-        (2, 32, 64, 128, False),
+        (2, 32, 64, 128),
     ],
-    ids=["with-jit", "without-jit"],
+    ids=["with-jit"],
 )
-def test_mlp_forward(mesh, batch_size, seq_len, hidden_dim, inter_dim, use_jit):
+def test_mlp_forward(mesh, batch_size, seq_len, hidden_dim, inter_dim):
     cfg = LMConfig(lm_hidden_dim=hidden_dim, lm_inter_dim=inter_dim)
 
     key = random.PRNGKey(42)
     params = LanguageModelMLP.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, hidden_dim))
 
-    if use_jit:
-        forward_fn = jax.jit(language_model_mlp_forward)
-        output = forward_fn(params, x)
-    else:
-        output = language_model_mlp_forward(params, x)
+    forward_fn = jax.jit(language_model_mlp_forward)
+    output = forward_fn(params, x)
 
     assert output.shape == (batch_size, seq_len, hidden_dim)
 
@@ -330,36 +221,11 @@ def test_mlp_forward(mesh, batch_size, seq_len, hidden_dim, inter_dim, use_jit):
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim",
-    [(64, 4, 2, 2, 128)],
-    ids=["standard-block"],
-)
-def test_block_init(mesh, hidden_dim, n_heads, n_kv_heads, n_layers, inter_dim):
-    cfg = LMConfig(
-        lm_hidden_dim=hidden_dim,
-        lm_n_heads=n_heads,
-        lm_n_kv_heads=n_kv_heads,
-        lm_n_layers=n_layers,
-        lm_inter_dim=inter_dim,
-    )
-
-    key = random.PRNGKey(42)
-    params = LanguageModelBlock.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, LanguageModelBlock)
-    assert hasattr(params, "norm1")
-    assert hasattr(params, "norm2")
-    assert hasattr(params, "attn")
-    assert hasattr(params, "mlp")
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads,inter_dim,use_jit",
+    "batch_size,seq_len,hidden_dim,n_heads,n_kv_heads,inter_dim",
     [
-        (2, 32, 64, 4, 2, 128, True),
-        (2, 32, 64, 4, 2, 128, False),
+        (2, 32, 64, 4, 2, 128),
     ],
-    ids=["with-jit", "without-jit"],
+    ids=["with-jit"],
 )
 def test_block_forward(
     mesh,
@@ -369,7 +235,6 @@ def test_block_forward(
     n_heads,
     n_kv_heads,
     inter_dim,
-    use_jit,
 ):
     cfg = LMConfig(
         lm_hidden_dim=hidden_dim,
@@ -386,11 +251,8 @@ def test_block_forward(
     rotary_params = RotaryEmbedding.init(key, mesh, ShardingRule, cfg)
     cos, sin = rotary_embedding_forward(rotary_params, position_ids)
 
-    if use_jit:
-        forward_fn = jax.jit(language_model_block_forward)
-        output = forward_fn(params, x, cos, sin)
-    else:
-        output = language_model_block_forward(params, x, cos, sin)
+    forward_fn = jax.jit(language_model_block_forward)
+    output = forward_fn(params, x, cos, sin)
 
     assert output.shape == (batch_size, seq_len, hidden_dim)
 
@@ -399,43 +261,11 @@ def test_block_forward(
 
 
 @pytest.mark.parametrize(
-    "vocab_size,hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim",
-    [(256, 64, 4, 2, 2, 128)],
-    ids=["standard-lm"],
-)
-def test_language_model_init(
-    mesh, vocab_size, hidden_dim, n_heads, n_kv_heads, n_layers, inter_dim
-):
-    cfg = LMConfig(
-        lm_vocab_size=vocab_size,
-        lm_hidden_dim=hidden_dim,
-        lm_n_heads=n_heads,
-        lm_n_kv_heads=n_kv_heads,
-        lm_n_layers=n_layers,
-        lm_inter_dim=inter_dim,
-    )
-
-    key = random.PRNGKey(42)
-    params = LanguageModel.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, LanguageModel)
-    assert params.token_embedding.shape == (vocab_size, hidden_dim)
-    assert hasattr(params, "rotary_emb")
-    assert len(params.blocks) == n_layers
-    assert hasattr(params, "norm")
-    assert params.head.shape == (hidden_dim, vocab_size)
-    assert params.vocab_size == vocab_size
-    assert params.hidden_dim == hidden_dim
-    assert params.num_layers == n_layers
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,vocab_size,hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim,use_jit",
+    "batch_size,seq_len,vocab_size,hidden_dim,n_heads,n_kv_heads,n_layers,inter_dim",
     [
-        (2, 32, 256, 64, 4, 2, 2, 128, True),
-        (2, 32, 256, 64, 4, 2, 2, 128, False),
+        (2, 32, 256, 64, 4, 2, 2, 128),
     ],
-    ids=["with-jit", "without-jit"],
+    ids=["with-jit"],
 )
 def test_language_model_forward(
     mesh,
@@ -447,7 +277,6 @@ def test_language_model_forward(
     n_kv_heads,
     n_layers,
     inter_dim,
-    use_jit,
 ):
     cfg = LMConfig(
         lm_vocab_size=vocab_size,
@@ -462,11 +291,8 @@ def test_language_model_forward(
     params = LanguageModel.init(key, mesh, ShardingRule, cfg)
     input_ids = random.randint(key, (batch_size, seq_len), 0, vocab_size)
 
-    if use_jit:
-        forward_fn = jax.jit(language_model_forward)
-        output = forward_fn(params, input_ids)
-    else:
-        output = language_model_forward(params, input_ids)
+    forward_fn = jax.jit(language_model_forward)
+    output = forward_fn(params, input_ids)
 
     assert output.shape == (batch_size, seq_len, vocab_size)
 

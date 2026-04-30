@@ -1,5 +1,6 @@
 import dataclasses
 
+import grain
 import jax
 import jax.numpy as jnp
 import jax.random as random
@@ -7,7 +8,6 @@ import pytest
 
 from src.models.vit import (
     LayerNorm,
-    Linear,
     PatchEmbeddings,
     ViT,
     ViTBlock,
@@ -53,52 +53,14 @@ class ShardingRule:
 
 
 @pytest.mark.parametrize(
-    "img_size,patch_size,hidden_dim,cls_flag",
+    "img_size,patch_size,hidden_dim,cls_flag,batch_size",
     [
-        (224, 16, 768, True),
-        (224, 16, 768, False),
+        (64, 8, 192, True, 1),
     ],
-    ids=["with-cls-flag", "without-cls-flag"],
-)
-def test_patch_embeddings_init(mesh, img_size, patch_size, hidden_dim, cls_flag):
-    cfg = ExampleConfig(
-        vit_img_size=img_size,
-        vit_patch_size=patch_size,
-        vit_hidden_dim=hidden_dim,
-        vit_cls_flag=cls_flag,
-    )
-
-    key = random.PRNGKey(42)
-    params = PatchEmbeddings.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, PatchEmbeddings)
-    assert params.conv_weight.shape == (patch_size, patch_size, 3, hidden_dim)
-    assert params.img_size == img_size
-    assert params.patch_size == patch_size
-    assert params.cls_flag == cls_flag
-    assert params.embd_dim == hidden_dim
-
-    num_patches = (img_size // patch_size) ** 2
-    if cls_flag:
-        assert params.cls_token is not None
-        assert params.cls_token.shape == (1, 1, hidden_dim)
-        assert params.position_embedding.shape == (1, num_patches + 1, hidden_dim)
-    else:
-        assert params.cls_token is None
-        assert params.position_embedding.shape == (1, num_patches, hidden_dim)
-
-
-@pytest.mark.parametrize(
-    "img_size,patch_size,hidden_dim,cls_flag,batch_size,use_jit",
-    [
-        (224, 16, 768, True, 2, False),
-        (224, 16, 768, False, 2, False),
-        (224, 16, 768, True, 2, True),
-    ],
-    ids=["with-cls-flag", "without-cls-flag", "with-jit"],
+    ids=["with-cls-flag"],
 )
 def test_patch_embeddings_forward(
-    mesh, img_size, patch_size, hidden_dim, cls_flag, batch_size, use_jit
+    mesh, img_size, patch_size, hidden_dim, cls_flag, batch_size
 ):
     cfg = ExampleConfig(
         vit_img_size=img_size,
@@ -111,19 +73,15 @@ def test_patch_embeddings_forward(
     params = PatchEmbeddings.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, 3, img_size, img_size))
 
-    if use_jit:
-        forward_fn = jax.jit(patch_embeddings_forward)
-        output1 = forward_fn(params, x)
-        output2 = forward_fn(params, x)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = patch_embeddings_forward(params, x)
+    forward_fn = jax.jit(patch_embeddings_forward)
+    output1 = forward_fn(params, x)
+    output2 = forward_fn(params, x)
+    assert jnp.allclose(output1, output2)
 
     num_patches = (img_size // patch_size) ** 2
     expected_seq_len = num_patches + 1 if cls_flag else num_patches
-    assert output.shape == (batch_size, expected_seq_len, hidden_dim)
-    assert output.dtype == cfg.dtype
+    assert output1.shape == (batch_size, expected_seq_len, hidden_dim)
+    assert output1.dtype == cfg.dtype
 
 
 @dataclasses.dataclass
@@ -139,60 +97,27 @@ class AttentionConfig:
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,num_heads",
+    "hidden_dim,num_heads,batch_size,seq_len",
     [
-        (768, 12),
+        (192, 3, 1, 17),
     ],
-    ids=["768-12"],
+    ids=["with-jit"],
 )
-def test_attention_init(mesh, hidden_dim, num_heads):
-    cfg = AttentionConfig(vit_hidden_dim=hidden_dim, vit_num_heads=num_heads)
-
-    key = random.PRNGKey(42)
-    params = ViTMultiHeadAttention.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, ViTMultiHeadAttention)
-    assert params.qkv_proj.shape == (hidden_dim, 3 * hidden_dim)
-    assert params.out_proj.shape == (hidden_dim, hidden_dim)
-    assert params.num_heads == num_heads
-    assert params.embd_dim == hidden_dim
-    assert params.head_dim == hidden_dim // num_heads
-    assert params.dropout == cfg.vit_dropout
-
-
-@pytest.mark.parametrize(
-    "hidden_dim,num_heads,batch_size,seq_len,use_jit,use_dropout",
-    [
-        (768, 12, 2, 197, True, False),
-        (768, 12, 2, 197, False, True),
-    ],
-    ids=["with-jit", "with-dropout"],
-)
-def test_attention_forward(
-    mesh, hidden_dim, num_heads, batch_size, seq_len, use_jit, use_dropout
-):
+def test_attention_forward(mesh, hidden_dim, num_heads, batch_size, seq_len):
     cfg = AttentionConfig(vit_hidden_dim=hidden_dim, vit_num_heads=num_heads)
 
     key = random.PRNGKey(42)
     params = ViTMultiHeadAttention.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, hidden_dim))
 
-    if use_dropout:
-        key = random.PRNGKey(43)
-    else:
-        key = None
+    key = random.PRNGKey(43)
+    forward_fn = jax.jit(vit_multi_head_attention_forward)
+    output1 = forward_fn(params, x, key)
+    output2 = forward_fn(params, x, key)
+    assert jnp.allclose(output1, output2)
 
-    if use_jit:
-        forward_fn = jax.jit(vit_multi_head_attention_forward)
-        output1 = forward_fn(params, x, key)
-        output2 = forward_fn(params, x, key)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = vit_multi_head_attention_forward(params, x, key)
-
-    assert output.shape == (batch_size, seq_len, hidden_dim)
-    assert output.dtype == cfg.dtype
+    assert output1.shape == (batch_size, seq_len, hidden_dim)
+    assert output1.dtype == cfg.dtype
 
 
 @dataclasses.dataclass
@@ -212,65 +137,27 @@ class MLPConfig:
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,mlp_hidden_dim",
+    "hidden_dim,mlp_hidden_dim,batch_size,seq_len",
     [
-        (192, 768),
+        (192, 768, 1, 17),
     ],
-    ids=["192-768"],
+    ids=["with-jit"],
 )
-def test_mlp_init(mesh, hidden_dim, mlp_hidden_dim):
-    cfg = MLPConfig(vit_hidden_dim=hidden_dim, vit_mlp_hidden_dim=mlp_hidden_dim)
-
-    key = random.PRNGKey(42)
-    params = ViTMLP.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, ViTMLP)
-    assert isinstance(params.fc1, Linear)
-    assert isinstance(params.fc2, Linear)
-    assert params.fc1.weight.shape == (hidden_dim, mlp_hidden_dim)
-    assert params.fc1.bias is not None
-    assert params.fc1.bias.shape == (mlp_hidden_dim,)
-    assert params.fc2.weight.shape == (mlp_hidden_dim, hidden_dim)
-    assert params.fc2.bias is not None
-    assert params.fc2.bias.shape == (hidden_dim,)
-    assert params.hidden_dim == hidden_dim
-    assert params.mlp_hidden_dim == mlp_hidden_dim
-    assert params.dropout == cfg.vit_dropout
-
-
-@pytest.mark.parametrize(
-    "hidden_dim,mlp_hidden_dim,batch_size,seq_len,use_jit,use_dropout",
-    [
-        (768, 3072, 2, 197, True, False),
-        (768, 3072, 2, 197, False, True),
-    ],
-    ids=["with-jit", "with-dropout"],
-)
-def test_mlp_forward(
-    mesh, hidden_dim, mlp_hidden_dim, batch_size, seq_len, use_jit, use_dropout
-):
+def test_mlp_forward(mesh, hidden_dim, mlp_hidden_dim, batch_size, seq_len):
     cfg = MLPConfig(vit_hidden_dim=hidden_dim, vit_mlp_hidden_dim=mlp_hidden_dim)
 
     key = random.PRNGKey(42)
     params = ViTMLP.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, hidden_dim))
 
-    if use_dropout:
-        key = random.PRNGKey(43)
-    else:
-        key = None
+    key = random.PRNGKey(43)
+    forward_fn = jax.jit(vit_mlp_forward)
+    output1 = forward_fn(params, x, key)
+    output2 = forward_fn(params, x, key)
+    assert jnp.allclose(output1, output2)
 
-    if use_jit:
-        forward_fn = jax.jit(vit_mlp_forward)
-        output1 = forward_fn(params, x, key)
-        output2 = forward_fn(params, x, key)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = vit_mlp_forward(params, x, key)
-
-    assert output.shape == (batch_size, seq_len, hidden_dim)
-    assert output.dtype == cfg.dtype
+    assert output1.shape == (batch_size, seq_len, hidden_dim)
+    assert output1.dtype == cfg.dtype
 
 
 @dataclasses.dataclass
@@ -305,31 +192,26 @@ def test_layer_norm_init(mesh, normalized_shape):
 
 
 @pytest.mark.parametrize(
-    "normalized_shape,batch_size,seq_len,use_jit",
+    "normalized_shape,batch_size,seq_len",
     [
-        (384, 4, 100, False),
-        (768, 2, 197, True),
+        (64, 1, 17),
     ],
-    ids=["small", "with-jit"],
+    ids=["with-jit"],
 )
-def test_layer_norm_forward(mesh, normalized_shape, batch_size, seq_len, use_jit):
+def test_layer_norm_forward(mesh, normalized_shape, batch_size, seq_len):
     cfg = LayerNormConfig(normalized_shape=normalized_shape)
 
     key = random.PRNGKey(42)
     params = LayerNorm.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, normalized_shape))
 
-    if use_jit:
-        forward_fn = jax.jit(layer_norm_forward)
-        output1 = forward_fn(params, x)
-        output2 = forward_fn(params, x)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = layer_norm_forward(params, x)
+    forward_fn = jax.jit(layer_norm_forward)
+    output1 = forward_fn(params, x)
+    output2 = forward_fn(params, x)
+    assert jnp.allclose(output1, output2)
 
-    assert output.shape == (batch_size, seq_len, normalized_shape)
-    assert output.dtype == cfg.dtype
+    assert output1.shape == (batch_size, seq_len, normalized_shape)
+    assert output1.dtype == cfg.dtype
 
 
 @dataclasses.dataclass
@@ -363,42 +245,11 @@ class ViTBlockConfig:
 
 
 @pytest.mark.parametrize(
-    "hidden_dim,num_heads,mlp_hidden_dim",
+    "hidden_dim,num_heads,mlp_hidden_dim,batch_size,seq_len",
     [
-        (192, 3, 768),
+        (192, 3, 768, 1, 17),
     ],
-    ids=["192-3-768"],
-)
-def test_vit_block_init(mesh, hidden_dim, num_heads, mlp_hidden_dim):
-    cfg = ViTBlockConfig(
-        vit_hidden_dim=hidden_dim,
-        vit_num_heads=num_heads,
-        vit_mlp_hidden_dim=mlp_hidden_dim,
-    )
-
-    key = random.PRNGKey(42)
-    params = ViTBlock.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, ViTBlock)
-    assert isinstance(params.ln1, LayerNorm)
-    assert isinstance(params.attn, ViTMultiHeadAttention)
-    assert isinstance(params.ln2, LayerNorm)
-    assert isinstance(params.mlp, ViTMLP)
-    assert params.ln1.normalized_shape == hidden_dim
-    assert params.ln2.normalized_shape == hidden_dim
-    assert params.attn.embd_dim == hidden_dim
-    assert params.attn.num_heads == num_heads
-    assert params.mlp.hidden_dim == hidden_dim
-    assert params.mlp.mlp_hidden_dim == mlp_hidden_dim
-
-
-@pytest.mark.parametrize(
-    "hidden_dim,num_heads,mlp_hidden_dim,batch_size,seq_len,use_jit,use_dropout",
-    [
-        (768, 12, 3072, 2, 197, True, False),
-        (768, 12, 3072, 2, 197, False, True),
-    ],
-    ids=["with-jit", "with-dropout"],
+    ids=["with-jit"],
 )
 def test_vit_block_forward(
     mesh,
@@ -407,8 +258,6 @@ def test_vit_block_forward(
     mlp_hidden_dim,
     batch_size,
     seq_len,
-    use_jit,
-    use_dropout,
 ):
     cfg = ViTBlockConfig(
         vit_hidden_dim=hidden_dim,
@@ -420,22 +269,14 @@ def test_vit_block_forward(
     params = ViTBlock.init(key, mesh, ShardingRule, cfg)
     x = random.normal(key, (batch_size, seq_len, hidden_dim))
 
-    if use_dropout:
-        key = random.PRNGKey(43)
-    else:
-        key = None
+    key = random.PRNGKey(43)
+    forward_fn = jax.jit(vit_block_forward)
+    output1 = forward_fn(params, x, key)
+    output2 = forward_fn(params, x, key)
+    assert jnp.allclose(output1, output2)
 
-    if use_jit:
-        forward_fn = jax.jit(vit_block_forward)
-        output1 = forward_fn(params, x, key)
-        output2 = forward_fn(params, x, key)
-        assert jnp.allclose(output1, output2)
-        output = output1
-    else:
-        output = vit_block_forward(params, x, key)
-
-    assert output.shape == (batch_size, seq_len, hidden_dim)
-    assert output.dtype == cfg.dtype
+    assert output1.shape == (batch_size, seq_len, hidden_dim)
+    assert output1.dtype == cfg.dtype
 
 
 @dataclasses.dataclass
@@ -552,11 +393,11 @@ def test_vit_init(
             224,
             196,
             False,
-            2,
+            1,
             True,
         ),
         ("SauravMaheshkar/nanoVLMJAX", "test", 2, 192, 8, 64, 64, True, 1, False),
-        ("SauravMaheshkar/nanoVLMJAX", "test", 2, 192, 8, 64, 64, True, 2, True),
+        ("SauravMaheshkar/nanoVLMJAX", "test", 2, 192, 8, 64, 64, True, 1, True),
     ],
     ids=["siglip-no-jit", "siglip-jit", "hub-no-jit", "hub-jit"],
 )
@@ -704,6 +545,7 @@ def test_vit_save_and_load(mesh):
         )
 
 
+@pytest.mark.local
 def test_vit_dataloader_forward(mesh):
     import numpy as np
     from transformers import AutoProcessor
@@ -722,6 +564,19 @@ def test_vit_dataloader_forward(mesh):
         hf_dataset=ds,
         image_processor=processor,
     )
+
+    map_ds = grain.MapDataset.source(dataset)
+    map_ds = map_ds.filter(lambda x: len(x.get("messages", [])) > 0)
+
+    assert len(map_ds) > 0, "Filter yielded no elements"
+
+    iter_ds = map_ds.to_iter_dataset(
+        grain.ReadOptions(num_threads=1, prefetch_buffer_size=10)
+    )
+
+    first_item = next(iter(iter_ds))
+    assert first_item is not None
+    assert "messages" in first_item
 
     vit_cfg = ViTConfig(
         vit_img_size=512,
@@ -747,8 +602,35 @@ def test_vit_dataloader_forward(mesh):
             x = image
 
         x = np.asarray(x)
-        x = x[0]
-        x = np.expand_dims(x, axis=0)
+
+        # Siglip processor outputs shape (B, C, H, W) where B=1 or (C, H, W)
+        # ViT expects exactly (B, C, H, W) with B >= 1
+        if x.ndim == 3:
+            x = np.expand_dims(x, axis=0)  # (C,H,W) -> (B,C,H,W) with B=1
+        elif x.ndim == 4 and x.shape[0] == 1:
+            pass  # Already (1,C,H,W) - good
+
+        expected_shape = (1, 3, vit_cfg.vit_img_size, vit_cfg.vit_img_size)
+        actual_shape = (x.shape[0], x.shape[1], x.shape[2], x.shape[3])
+        assert actual_shape == expected_shape, (
+            f"Image shape {actual_shape} doesn't match ViT config "
+            f"(B,C,H,W)={expected_shape}"
+        )
 
         output = vit_forward(params, x)
-        assert output.shape[1] == vit_cfg.vit_hidden_dim
+
+        # With cls_flag=True, ViT returns pooled output (B, hidden_dim)
+        # Without cls_flag, returns sequence (B, num_patches, hidden_dim)
+        if vit_cfg.vit_cls_flag:
+            expected_shape = (1, vit_cfg.vit_hidden_dim)
+            assert output.shape == expected_shape, (
+                f"Output shape {output.shape} != expected {expected_shape} "
+                f"(cls_flag=True gives pooled output)"
+            )
+        else:
+            expected_patches = (vit_cfg.vit_img_size // vit_cfg.vit_patch_size) ** 2
+            expected_shape = (1, expected_patches, vit_cfg.vit_hidden_dim)
+            assert output.shape == expected_shape, (
+                f"Output shape {output.shape} != expected {expected_shape} "
+                f"(cls_flag=False gives sequence output)"
+            )

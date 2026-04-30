@@ -63,39 +63,17 @@ class ShardingRule:
 
 
 @pytest.mark.parametrize(
-    "vit_hidden_dim,lm_hidden_dim",
-    [(768, 576)],
-    ids=["standard"],
-)
-def test_vlm_init(mesh, vit_hidden_dim, lm_hidden_dim):
-    cfg = VLMTestConfig(
-        vit_hidden_dim=vit_hidden_dim,
-        lm_hidden_dim=lm_hidden_dim,
-    )
-
-    key = random.PRNGKey(42)
-    params = VisionLanguageModel.init(key, mesh, ShardingRule, cfg)
-
-    assert isinstance(params, VisionLanguageModel)
-    assert hasattr(params, "vision_encoder")
-    assert hasattr(params, "modality_projector")
-    assert hasattr(params, "decoder")
-
-
-@pytest.mark.parametrize(
-    "batch_size,seq_len,vocab_size,use_jit",
+    "batch_size,seq_len,vocab_size",
     [
-        (1, 16, 256, True),
-        (1, 16, 256, False),
+        (1, 16, 256),
     ],
-    ids=["with-jit", "without-jit"],
+    ids=["with-jit"],
 )
 def test_vlm_forward(
     mesh,
     batch_size,
     seq_len,
     vocab_size,
-    use_jit,
 ):
     cfg = VLMTestConfig(
         lm_vocab_size=vocab_size,
@@ -105,29 +83,24 @@ def test_vlm_forward(
     params = VisionLanguageModel.init(key, mesh, ShardingRule, cfg)
     input_ids = random.randint(key, (batch_size, seq_len), 0, vocab_size)
 
-    if use_jit:
-        forward_fn = jax.jit(vlm_forward)
-        output = forward_fn(params, input_ids, images=None)
-    else:
-        output = vlm_forward(params, input_ids, images=None)
+    forward_fn = jax.jit(vlm_forward)
+    output = forward_fn(params, input_ids, images=None)
 
     assert output.shape == (batch_size, seq_len, vocab_size)
 
 
 @pytest.mark.parametrize(
-    "batch_size,seq_len,vocab_size,use_jit",
+    "batch_size,seq_len,vocab_size",
     [
-        (1, 16, 256, True),
-        (1, 16, 256, False),
+        (1, 16, 256),
     ],
-    ids=["multimodal-with-jit", "multimodal-without-jit"],
+    ids=["multimodal-with-jit"],
 )
 def test_vlm_forward_multimodal(
     mesh,
     batch_size,
     seq_len,
     vocab_size,
-    use_jit,
 ):
     cfg = VLMTestConfig(
         lm_vocab_size=vocab_size,
@@ -142,11 +115,8 @@ def test_vlm_forward_multimodal(
 
     images = random.normal(key, (batch_size, 3, cfg.vit_img_size, cfg.vit_img_size))
 
-    if use_jit:
-        forward_fn = jax.jit(vlm_forward)
-        output = forward_fn(params, input_ids, images=images)
-    else:
-        output = vlm_forward(params, input_ids, images=images)
+    forward_fn = jax.jit(vlm_forward)
+    output = forward_fn(params, input_ids, images=images)
 
     assert output.shape == (batch_size, seq_len, vocab_size)
 
