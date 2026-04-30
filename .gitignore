@@ -8,7 +8,6 @@
 
 venv/
 .venv/
-notebooks/
 
 uv.lock
 **/.DS_Store

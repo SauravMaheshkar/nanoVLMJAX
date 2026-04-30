@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any
 
 import grain
@@ -70,7 +71,7 @@ def collate_vlm_batch(
         if sample_images:
             # Extract pixel_values from processor output dict and squeeze batch dim
             first_img = sample_images[0]
-            if isinstance(first_img, dict):
+            if isinstance(first_img, Mapping):
                 pixel_values = first_img["pixel_values"]
             else:
                 pixel_values = first_img

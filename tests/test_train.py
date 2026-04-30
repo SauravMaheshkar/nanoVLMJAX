@@ -1,4 +1,5 @@
 import tempfile
+from collections import UserDict
 
 import jax
 import jax.numpy as jnp
@@ -162,6 +163,33 @@ def test_collate_vlm_batch():
     # Check left-padding
     assert batch["input_ids"][0, 0] == pad_token_id
     assert batch["input_ids"][0, -3] == 1
+
+
+def test_collate_vlm_batch_with_batch_feature():
+    """collate_vlm_batch should handle UserDict/BatchFeature from AutoProcessor."""
+    pad_token_id = 0
+    # UserDict simulates transformers.BatchFeature (a UserDict subclass)
+    batch_feature = UserDict(
+        {"pixel_values": np.ones((1, 3, 224, 224), dtype=np.float32)}
+    )
+    samples = [
+        {
+            "input_ids": np.array([1, 2, 3], dtype=np.int32),
+            "attention_mask": np.array([1, 1, 1], dtype=np.int32),
+            "labels": np.array([2, 3, -100], dtype=np.int32),
+            "images": [batch_feature],
+        },
+        {
+            "input_ids": np.array([4, 5], dtype=np.int32),
+            "attention_mask": np.array([1, 1], dtype=np.int32),
+            "labels": np.array([5, -100], dtype=np.int32),
+            "images": [],
+        },
+    ]
+
+    batch = collate_vlm_batch(samples, pad_token_id, max_length=8)
+    assert batch is not None
+    assert batch["images"].shape == (2, 3, 224, 224)
 
 
 def test_collate_vlm_batch_max_length_filter():
