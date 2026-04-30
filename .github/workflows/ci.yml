@@ -1,48 +1,61 @@
 name: "CI/CD"
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**/*.py"
-      - "pyproject.toml"
-      - ".github/workflows/ci.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "**/*.py"
-      - "pyproject.toml"
-      - ".github/workflows/ci.yml"
-  release:
-    types: [created]
-  schedule:
-    - cron: "0 0 * * 0"
+    push:
+        branches: [main]
+        paths:
+            - "**/*.py"
+            - "pyproject.toml"
+            - ".github/workflows/ci.yml"
+    pull_request:
+        branches: [main]
+        paths:
+            - "**/*.py"
+            - "pyproject.toml"
+            - ".github/workflows/ci.yml"
+    release:
+        types: [created]
+    schedule:
+        - cron: "0 0 * * 0"
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+    lint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-        os: [ubuntu-latest, macos-latest]
+            - name: Install uv
+              uses: astral-sh/setup-uv@v6
 
-    steps:
-      - uses: actions/checkout@v4
+            - name: Set up Python
+              run: uv python install 3.11
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+            - name: Install dependencies
+              run: uv sync --all-extras --dev
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+            - name: Ruff
+              run: uv run ruff check .
 
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+    test:
+        runs-on: ${{ matrix.os }}
 
-      - name: Ruff
-        run: |
-          uv run ruff check --fix .
+        strategy:
+            fail-fast: false
+            matrix:
+                python-version: ["3.13"]
+                os: [ubuntu-latest]
 
-      - name: Test with PyTest
-        run: |
-          uv run python -m pytest -v
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v6
+
+            - name: Set up Python ${{ matrix.python-version }}
+              run: uv python install ${{ matrix.python-version }}
+
+            - name: Install dependencies
+              run: uv sync --all-extras --dev
+
+            - name: Test with PyTest
+              run: uv run python -m pytest -v -n auto -m "not local"

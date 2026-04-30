@@ -24,6 +24,7 @@ dev = [
 ]
 test = [
     "pytest>=8.4.0",
+    "pytest-xdist>=3.6.0",
 ]
 
 [tool.ruff.lint]
@@ -36,4 +37,12 @@ testpaths = ["tests"]
 python_functions = [
     "test_*",
     "illustrate_*"
+]
+addopts = [
+    "-p", "no:faulthandler",
+    "--tb=short",
+    "--maxfail=1",
+]
+markers = [
+    "local: marks tests that are too heavy for CI (e.g. real data loaders, large models)",
 ]

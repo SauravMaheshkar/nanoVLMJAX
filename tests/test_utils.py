@@ -164,8 +164,9 @@ def test_init_leaves(mesh):
         batch = "fsdp"
         feature = "tp"
 
+    # Use a shape divisible by every possible mesh axis size (1, 2, 4, 8).
     spec = ParamSpec(
-        shape=(4, 8),
+        shape=(8, 8),
         logical_axes=("batch", "feature"),
         initializer=jax.nn.initializers.normal(),
         dtype=jnp.float32,
@@ -231,9 +232,13 @@ def test_param_initializer(mesh):
     assert isinstance(params, SimpleLayer)
     assert params.weight.shape == (size, size)
     assert params.weight.dtype == jnp.float32
-    assert params.weight.sharding.spec == PartitionSpec(None, "tp")
+    # When a mesh axis has size 1 JAX normalizes the spec (e.g. "tp" -> None).
+    _tp = None if mesh.axis_sizes[1] == 1 else "tp"
+    weight_spec = PartitionSpec() if _tp is None else PartitionSpec(None, _tp)
+    assert params.weight.sharding.spec == weight_spec
     assert params.bias.shape == (size,)
     assert params.bias.dtype == jnp.float32
-    assert params.bias.sharding.spec == PartitionSpec("tp")
+    bias_spec = PartitionSpec() if _tp is None else PartitionSpec(_tp)
+    assert params.bias.sharding.spec == bias_spec
     assert jnp.allclose(params.bias, jnp.zeros(size, dtype=jnp.float32))
     assert params.size == size
