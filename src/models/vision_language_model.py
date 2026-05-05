@@ -222,7 +222,26 @@ class VisionLanguageModel(ParamInitializer):
         with open(config_path) as f:
             hf_config = json.load(f)
 
-        cfg = VLMConfig(**hf_config)
+        # Map known PyTorch alias names to canonical VLMConfig fields.
+        field_names = {f.name for f in dataclasses.fields(VLMConfig)}
+        aliases = {"lm_base_vocab_size": "lm_vocab_size"}
+        unknown = []
+        filtered = {}
+        for k, v in hf_config.items():
+            canonical = aliases.get(k, k)
+            if canonical in field_names:
+                filtered[canonical] = v
+            else:
+                unknown.append(k)
+        if unknown:
+            logger.warning(
+                "Checkpoint config has %d unknown key(s) with no VLMConfig mapping: %s."
+                "They will be ignored. If the model behaves unexpectedly, "
+                "check whether VLMConfig needs updating.",
+                len(unknown),
+                unknown,
+            )
+        cfg = VLMConfig(**filtered)
 
         hf_state_dict = {}
         with safetensors.safe_open(safetensors_file, framework="pt", device="cpu") as f:
