@@ -222,9 +222,12 @@ class VisionLanguageModel(ParamInitializer):
         with open(config_path) as f:
             hf_config = json.load(f)
 
-        # Map known PyTorch alias names to canonical VLMConfig fields.
+        # Map known PyTorch and legacy alias names to canonical VLMConfig fields.
         field_names = {f.name for f in dataclasses.fields(VLMConfig)}
-        aliases = {"lm_base_vocab_size": "lm_vocab_size"}
+        aliases = {
+            "lm_base_vocab_size": "lm_vocab_size",
+            "lm_n_blocks": "lm_n_layers",
+        }
         unknown = []
         filtered = {}
         for k, v in hf_config.items():
