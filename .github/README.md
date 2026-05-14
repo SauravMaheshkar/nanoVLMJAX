@@ -43,3 +43,7 @@ uv run python main.py --workdir=artifacts/ \
 * https://github.com/huggingface/nanoVLM
 * https://github.com/jax-ml/jax-llm-examples
 * https://github.com/AakashKumarNain/nanoGPTJAX
+
+### Acknowledgements
+
+Thanks to the ML Developer Programs' team at Google for providing GCP credits.
